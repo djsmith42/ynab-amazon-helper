@@ -48,6 +48,7 @@
       .overlay .ptext { font-weight: 600; font-size: 14px; }
       .overlay .pbar { width: min(420px, 70%); height: 10px; background: #e7e9ec; border-radius: 5px; overflow: hidden; }
       .overlay .pfill { height: 100%; width: 0; background: #3b5eda; border-radius: 5px; transition: width .4s ease; }
+      .allset { margin: 50px 0; display: flex; align-items: center; justify-content: center; text-align: center; font-size: 15px; font-weight: 600; }
       tr.flash td { animation: yah-flash 2s ease-out; }
       @keyframes yah-flash { from { background: #fff3c4; } to { background: transparent; } }
       table { width: 100%; border-collapse: collapse; }
@@ -79,6 +80,7 @@
       .st { padding: 12px 16px; border-bottom: 1px solid #e5e5e5; background: #fafafa; display: grid; gap: 8px; }
       .st ol { margin: 6px 0 0; padding-left: 20px; }
       .st summary { font-weight: 700; }
+      .st details#instr { margin-top: 0; }
       .st li { margin: 2px 0; }
       .row2 { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
       .pill { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; padding: 3px 10px; border-radius: 999px; }
@@ -283,7 +285,7 @@
               ${r.ambiguous ? `<div class="note">Another Amazon charge has the same amount and date. Check this one.</div>` : ""}</td>
             <td class="fit muted">${esc(r.amazon.date)}${r.dayDiff ? ` (${r.dayDiff > 0 ? "+" : ""}${r.dayDiff}d)` : ""}<br>${r.amazon.orderIds.map((id, k) => `<a href="${esc(YAH.orderUrl(id))}" target="_blank" rel="noopener" title="${esc(id)}">View Order on Amazon${r.amazon.orderIds.length > 1 ? ` ${k + 1}` : ""} ↗</a>`).join("<br>")}</td>
           </tr>`).join("")}
-        </tbody></table>` : `<p>Nothing to fill.</p>`}
+        </tbody></table>` : `<div class="allset">All your Amazon orders have memos. Congrats!</div>`}
       ${unmatched.length ? `<details id="unmatched"${unmatchedOpen ? " open" : ""}><summary>${unmatched.length} YNAB Amazon transactions with no Amazon match</summary>
         <p class="muted">These may be older than the Amazon data, or not on the Amazon page yet. Scroll further back on the Amazon page to find them.</p>
         <table><tbody>${unmatched.map((t) => `<tr><td class="date">${esc(t.date)}</td><td>${esc(t.account)}</td><td class="amt">${money(t.amountMilli)}</td><td class="muted">${esc(t.original || t.payee)}</td></tr>`).join("")}</tbody></table></details>` : ""}`;

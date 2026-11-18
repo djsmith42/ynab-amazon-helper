@@ -32,5 +32,3 @@ shows one, otherwise the account holder's name.
 ## Develop
 
 - `node --test test/*.test.js` runs the unit tests.
-- `tools/recon-extension` + `tools/recon-server.py` is a dev-only extension that
-  dumps page structure to a local server. Do not keep it installed.
