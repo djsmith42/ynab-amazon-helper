@@ -215,8 +215,7 @@
     const live = a && Date.now() - a.at < 60000;
     let html = "";
     if (live && a.kind !== "ok") {
-      const progress = a.remaining ? `<span class="muted">${a.ok + a.failed} of ${a.total} orders read</span>` : "";
-      html = `<span class="pill ${esc(a.kind)}">${esc(a.emoji)} Amazon page: ${esc(a.text)}</span>${progress}`;
+      html = `<span class="pill ${esc(a.kind)}">${esc(a.emoji)} Amazon page: ${esc(a.text)}</span>`;
     }
     $("live").innerHTML = html;
     $("live").hidden = !html;

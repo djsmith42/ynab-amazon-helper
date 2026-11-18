@@ -144,9 +144,34 @@
   let retryCount = 0;
   let retryTimer = null;
   let listError = false;
+  // When the current rate limit started, and whether Amazon answered HTTP 429.
+  // Amazon does not say how long a limit lasts, so the panel measures each one and
+  // keeps the last 10 durations (rateLimitLog) to tell the user what to expect.
+  let limitedSince = 0;
+  let saw429 = false;
+  let last429 = 0;
+  const saw429Recent = () => Date.now() - last429 < 5000;
+  function setListError(on) {
+    if (on && !limitedSince) limitedSince = Date.now();
+    if (!on && limitedSince) {
+      const entry = { start: limitedSince, end: Date.now() };
+      limitedSince = 0;
+      saw429 = false;
+      store.get("rateLimitLog").then(({ rateLimitLog = [] }) => store.set({ rateLimitLog: [...rateLimitLog, entry].slice(-10) })).catch(() => {});
+    }
+    listError = on;
+  }
+  // See the real HTTP status of Amazon's list requests (Chrome 109+).
+  try {
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) {
+        if (e.responseStatus === 429 && /get-transactions/.test(e.name)) { saw429 = true; last429 = Date.now(); setListError(true); render(); }
+      }
+    }).observe({ type: "resource", buffered: false });
+  } catch {}
   function scheduleTryAgain() {
     if (retryTimer || !findTryAgain()) return;
-    listError = true;
+    setListError(true);
     // Amazon answers 429 "Rate limit exceeded" here. Retrying fast extends the limit,
     // so wait 30 s, 60 s, 2 min, then 5 min between tries.
     const wait = Math.min(300000, 30000 * 2 ** retryCount);
@@ -154,10 +179,10 @@
     retryTimer = setTimeout(() => {
       retryTimer = null;
       const btn = findTryAgain();
-      if (!btn) { listError = false; retryCount = 0; render(); return; }
+      if (!btn) { setListError(false); retryCount = 0; render(); return; }
       retryCount++;
       btn.click();
-      setTimeout(() => { if (!findTryAgain()) { listError = false; retryCount = 0; } render(); }, 3000);
+      setTimeout(() => { if (!findTryAgain()) { setListError(false); retryCount = 0; } render(); }, 3000);
     }, wait);
   }
 
@@ -181,7 +206,7 @@
         for (let w = 0; w < 40 && rowCount() === before; w++) await sleep(250);
         // Rate limited ("Something went wrong"): stop scrolling. The background retry
         // (scheduleTryAgain) clicks "Try Again" slowly.
-        listError = !!findTryAgain();
+        setListError(!!findTryAgain());
         if (rowCount() === before) {
           status = listError ? "Amazon could not load more." : "Reached the end of the list.";
           break;
@@ -209,7 +234,7 @@
     shadow.innerHTML = `
       <style>
         [hidden] { display: none !important; }
-        .p { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 300px; font: 13px/1.4 system-ui, -apple-system, sans-serif;
+        .p { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; width: 360px; max-width: calc(100vw - 32px); font: 13px/1.4 system-ui, -apple-system, sans-serif;
              background: #fff; color: #0f1111; border: 1px solid #d5d9d9; border-radius: 10px; box-shadow: 0 4px 16px rgba(0,0,0,.18); padding: 12px; }
         .h { font-weight: 600; margin-bottom: 6px; display: flex; justify-content: space-between; }
         .x { cursor: pointer; border: 0; background: none; font-size: 16px; line-height: 1; }
@@ -227,13 +252,18 @@
         .pill.idle { background: #eef0f2; color: #565959; }
         .pill.busy .dot, .pill.load .dot { animation: yah-pulse 1s ease-in-out infinite; }
         @keyframes yah-pulse { 50% { opacity: .35; } }
-        .bar { height: 8px; background: #e7e9ec; border-radius: 4px; overflow: hidden; display: flex; margin: 3px 0 8px; }
+        .bar { position: relative; height: 16px; background: #e7e9ec; border-radius: 8px; overflow: hidden; display: flex; margin: 3px 0 8px; }
+        .bar > .txt { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; color: #0f1111;
+                      font-variant-numeric: tabular-nums; text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 3px #fff; pointer-events: none; }
+        .limit { margin-top: 8px; padding: 8px 10px; background: #fff8db; border: 1px solid #f0d77a; border-radius: 8px; color: #5c4a00; font-size: 12px; }
+        .limit ul { margin: 6px 0 0; padding-left: 18px; }
+        details.opts { margin-top: 8px; font-size: 12px; color: #565959; }
+        details.opts > summary { cursor: pointer; user-select: none; }
+        details.opts .btns { margin-top: 6px; }
         .bar > .ok { background: #067d62; transition: width .3s; }
         .bar > .bad { background: #b12704; transition: width .3s; }
         .bar > .run { background: #ff9900; transition: width .3s; }
-        .count { text-align: center; font-size: 12px; color: #565959; margin: -4px 0 8px; font-variant-numeric: tabular-nums; }
         .lbl { display: flex; justify-content: space-between; font-size: 12px; color: #565959; }
-        .lbl b { color: #0f1111; font-weight: 600; }
         .mini { position: fixed; right: 16px; bottom: 16px; z-index: 2147483647; }
       </style>
       <div class="p" id="p">
@@ -243,8 +273,10 @@
         <div class="btns">
           <button class="b primary" id="more">Load older orders</button>
           <button class="b" id="retry" hidden>Retry failed orders</button>
-          <button class="b" id="clear">Clear saved data</button>
         </div>
+        <details class="opts" id="opts"><summary>More options</summary>
+          <div class="btns"><button class="b" id="clear">Clear saved data</button></div>
+        </details>
       </div>
       <button class="b mini" id="show" hidden>YNAB helper</button>`;
     document.documentElement.appendChild(host);
@@ -278,8 +310,29 @@
     return isRecent ? `from ${fmt.format(first)} to present` : `between ${fmt.format(first)} and ${fmt.format(last)}`;
   }
 
+  // Instructions while Amazon limits requests, with how long it has lasted and how
+  // long earlier limits lasted on this computer.
+  function limitHelp(log) {
+    const min = (ms) => Math.max(1, Math.round(ms / 60000));
+    const plural = (n) => `${n} minute${n === 1 ? "" : "s"}`;
+    const so = limitedSince ? `It started ${plural(min(Date.now() - limitedSince))} ago. ` : "";
+    const past = log.map((e) => e.end - e.start).filter((d) => d > 0).sort((a, b) => a - b);
+    let expect = "Amazon does not say how long the limit lasts. Plan to wait up to an hour.";
+    if (past.length) {
+      const lo = min(past[0]);
+      const hi = min(past[past.length - 1]);
+      const range = lo === hi ? plural(lo) : `${lo} to ${plural(hi)}`;
+      expect = `On this computer, the last ${past.length === 1 ? "limit" : `${past.length} limits`} cleared after ${range}.`;
+    }
+    return `<div class="limit">
+      <b>Amazon is limiting requests${saw429 ? " (error 429)" : ""}.</b> ${so}${expect}
+      <ul><li>Leave this tab open. It clicks “Try Again” by itself, with longer waits each time.</li>
+      <li>Do not scroll, reload, or click “Try Again”. Each request can make the limit last longer.</li>
+      <li>Saved orders stay saved. YNAB can use them now.</li></ul></div>`;
+  }
+
   async function render() {
-    const { amazonTxns = {}, orders = {} } = await store.get(["amazonTxns", "orders"]);
+    const { amazonTxns = {}, orders = {}, rateLimitLog = [] } = await store.get(["amazonTxns", "orders", "rateLimitLog"]);
     const txns = Object.values(amazonTxns);
     const ids = new Set(txns.flatMap((t) => t.orderIds));
     const ok = [...ids].filter((id) => orders[id] && !orders[id].error).length;
@@ -291,17 +344,18 @@
     ui.getElementById("body").innerHTML = `
       ${dates.length ? `<div class="row" style="color:#565959;margin-bottom:6px">Imported ${ok} order${ok === 1 ? "" : "s"} ${esc(dateRange(dates[0], dates[dates.length - 1]))}</div>` : ""}
       ${scroll ? `
-        <div class="lbl"><span>Loading older orders</span><b>${scroll.round} of ${scroll.rounds}</b></div>
-        <div class="bar"><div class="run" style="width:${(100 * scroll.round) / scroll.rounds}%"></div></div>` : ""}
-      <div class="bar" title="${ok} loaded, ${failed} failed, ${remaining} left">
-        <div class="ok" style="width:${pct(ok)}%"></div><div class="bad" style="width:${pct(failed)}%"></div>
-      </div>
-      ${remaining ? `<div class="count">${ok + failed} of ${ids.size}</div>` : ""}
+        <div class="bar"><div class="run" style="width:${(100 * scroll.round) / scroll.rounds}%"></div><span class="txt">${scroll.round} of ${scroll.rounds}</span></div>` : ""}
+      ${remaining ? `
+        <div class="lbl"><span>Orders read</span></div>
+        <div class="bar" title="${ok} loaded, ${failed} failed, ${remaining} left">
+          <div class="ok" style="width:${pct(ok)}%"></div><div class="bad" style="width:${pct(failed)}%"></div>
+          <span class="txt">${ok + failed} of ${ids.size}</span>
+        </div>` : ""}
       ${failed ? `<div class="row" style="color:#b12704">${failed} failed. Click “Retry failed orders”.</div>` : ""}
       ${/end of the list/.test(status) && !paging ? `<div class="row">Reached the end of the order list.</div>` : ""}
       ${lastError ? `<div class="err">${esc(lastError)}</div>` : ""}
-      ${remaining || busy || paging ? `<div class="row" style="margin-top:6px;color:#565959">Keep this tab in front until it is done.</div>` : ""}
-      ${status === "Amazon could not load more." ? `<div class="row" style="color:#b12704">Amazon limited requests (“Something went wrong”). Leave this tab open; it retries slowly. Do not reload or scroll fast.</div>` : ""}`;
+      ${remaining || busy || paging ? `<div class="row" style="margin-top:6px;color:#8a8f8f">Keep this tab open until it is done.</div>` : ""}
+      ${listError ? limitHelp(rateLimitLog) : ""}`;
     ui.getElementById("more").disabled = paging || busy;
     ui.getElementById("retry").hidden = !failed || busy;
 
@@ -329,6 +383,8 @@
   // Re-read the list whenever the page changes it (for example after "Next Page").
   let pending = null;
   const observer = new MutationObserver(() => {
+    // Amazon recovered by itself (the error is gone): end the rate limit now.
+    if (listError && !findTryAgain() && !saw429Recent()) { clearTimeout(retryTimer); retryTimer = null; retryCount = 0; setListError(false); render(); }
     if (!paging) scheduleTryAgain();
     clearTimeout(pending);
     pending = setTimeout(async () => {
@@ -360,6 +416,7 @@
   (async () => {
     for (let i = 0; i < 20 && !(await collectVisible()).found; i++) await sleep(500);
     status = "Ready";
+    scheduleTryAgain(); // the error can already show when the page opens
     render();
     fetchMissingOrders();
   })();

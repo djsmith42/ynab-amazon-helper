@@ -86,6 +86,7 @@ test("collects rows, reads each order, and shows Ready", async () => {
   assert.match(t.fetched.find((u) => u.includes("D01-")), /your-orders\/order-details/);
   assert.equal(t.panel().getElementById("retry").hidden, true, "no failures: no retry button");
   assert.match(t.panel().getElementById("body").textContent, /Imported 2 orders/);
+  assert.equal(t.panel().querySelectorAll(".bar").length, 0, "no progress bar when every order is read");
   assert.equal(t.data.amazonStatus.kind, "ok");
 });
 
@@ -124,8 +125,13 @@ test("order fetches wait while Amazon shows its list error", async () => {
   });
   await sleep(5500); // past the normal 4 s quiet time
   assert.equal(t.fetched.length, 0, "no order fetches while the error shows");
-  assert.match(t.pill(), /Paused while the list loads/);
+  assert.match(t.pill(), /Amazon rate limit, retrying slowly/);
+  assert.match(t.panel().getElementById("body").textContent, /Orders read\s*0 of 1/, "labeled bar with its count while orders are left");
+  assert.match(t.panel().getElementById("body").textContent, /Amazon is limiting requests\..*Plan to wait up to an hour.*Leave this tab open/s, "instructions while limited");
   t.w.document.getElementById("err").remove(); // Amazon recovers
   await waitFor(() => /^✅ ?Ready/.test(t.pill()), "Ready after the error clears", 15000);
   assert.equal(t.fetched.length, 1);
+  assert.equal(t.panel().querySelector(".limit"), null, "instructions go away");
+  assert.equal(t.data.rateLimitLog?.length, 1, "the limit's duration is saved");
+  assert.ok(t.data.rateLimitLog[0].end > t.data.rateLimitLog[0].start);
 });
