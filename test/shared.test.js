@@ -56,3 +56,58 @@ test("city from address", () => {
 test("digital orders link to the digital order page", () => {
   assert.equal(Y.orderUrl("D01-1238612-8966650"), "https://www.amazon.com/your-orders/order-details?orderID=D01-1238612-8966650");
 });
+
+test("confidence gate: no memo unless every order loaded with items", () => {
+  const good = { items: [{ title: "Widget", qty: 1 }], shipTo: { name: "Pat", addressLines: [] }, orderer: "Pat" };
+  assert.equal(Y.buildMemo({ amountCents: -1, orderIds: ["A"] }, { A: { error: "boom" } }), null, "failed order");
+  assert.equal(Y.buildMemo({ amountCents: -1, orderIds: ["A", "B"] }, { A: good }), null, "second order still loading");
+  assert.equal(Y.buildMemo({ amountCents: -1, orderIds: ["A"] }, { A: { ...good, items: [] } }), null, "no items");
+  assert.equal(Y.buildMemo({ amountCents: -1, orderIds: [] }, { A: good }), null, "no orders");
+  assert.match(Y.buildMemo({ amountCents: -1, orderIds: ["A", "B"] }, { A: good, B: good }), /^Widget; Widget \|/);
+});
+
+test("memo is never cut: links stay whole and the length stays within the limit", () => {
+  const long = (n) => ({ items: [{ title: `Product number ${n} with a very long descriptive name and more words`, qty: 1 }], shipTo: { name: `Person Number ${n} Longname`, addressLines: ["1 A ST", "SPRINGFIELD, IL 62701"] }, orderer: `Orderer${n}` });
+  const ids = ["111-0000001-0000001", "112-0000002-0000002"];
+  const memo = Y.buildMemo({ amountCents: -1, orderIds: ids }, { [ids[0]]: long(1), [ids[1]]: long(2) });
+  assert.ok(memo.length <= 200, `${memo.length}: ${memo}`);
+  const links = memo.match(Y.ORDER_URL_RE) || [];
+  assert.ok(links.length >= 1, memo);
+  for (const l of links) assert.ok(ids.some((id) => l === Y.orderUrl(id)), `whole link: ${l}`);
+  assert.ok(!/orderID=[^ |]*$/.test(memo) || links.length, memo);
+  // Every link that starts in the memo is complete.
+  const starts = memo.split("https://").length - 1;
+  assert.equal(starts, links.length, memo);
+});
+
+test("matcher: rejects bad dates and amounts, keeps the window, flags ties", () => {
+  const ynab = [{ id: "y", date: "2026-01-10", amountMilli: -10000 }];
+  const az = (key, date, amountCents = -1000) => ({ key, date, amountCents, orderIds: ["X"] });
+  assert.equal(Y.matchTransactions(ynab, [az("a", null)]).length, 0, "null date");
+  assert.equal(Y.matchTransactions(ynab, [az("a", "not a date")]).length, 0, "bad date");
+  assert.equal(Y.matchTransactions(ynab, [az("a", "2026-01-10", NaN)]).length, 0, "bad amount");
+  assert.equal(Y.matchTransactions(ynab, [az("a", "2026-01-05")]).length, 1, "5 days before: in window");
+  assert.equal(Y.matchTransactions(ynab, [az("a", "2026-01-04")]).length, 0, "6 days before: out");
+  assert.equal(Y.matchTransactions(ynab, [az("a", "2026-01-12")]).length, 1, "2 days after: in window");
+  assert.equal(Y.matchTransactions(ynab, [az("a", "2026-01-13")]).length, 0, "3 days after: out");
+  const tie = Y.matchTransactions(ynab, [az("a", "2026-01-09"), az("b", "2026-01-09")]);
+  assert.equal(tie.length, 1);
+  assert.equal(tie[0].ambiguous, true);
+});
+
+test("amount sign pattern only accepts + - and the minus sign", () => {
+  assert.equal(Y.parseAmountCents("−$5.00"), -500);
+  assert.equal(Y.parseAmountCents("Z$1.00"), -100, "unknown prefix is ignored, amount is a charge");
+});
+
+test("fitItems: one long item is shortened to the room, with the count of the rest", () => {
+  const out = Y.fitItems(["A".repeat(30) + " word word word word", "second"], 25);
+  assert.ok(out.length <= 25, out);
+  assert.match(out, /… \+1 more$/);
+  assert.equal(Y.fitItems(["short", "items"], 50), "short; items");
+});
+
+test("shorten keeps short text and cuts long text at a word", () => {
+  assert.equal(Y.shorten("  a   b  ", 10), "a b");
+  assert.equal(Y.shorten("alpha beta gamma delta", 12), "alpha beta…");
+});

@@ -1,4 +1,4 @@
-// Content script for https://app.ynab.com. Adds an "Amazon memos" button.
+// Content script for https://app.ynab.com. Adds an "Amazon Helper" button.
 // It matches YNAB Amazon transactions to the Amazon data saved by amazon.js,
 // shows a preview, and writes the memos you approve.
 (() => {
@@ -6,8 +6,8 @@
   const AMAZON_URL = "https://www.amazon.com/cpe/yourpayments/transactions";
 
   // ---------- bridge to ynab-main.js ----------
-  let seq = 0;
   const waiting = new Map();
+  const TIMEOUT = "YNAB did not answer.";
   window.addEventListener("message", (e) => {
     if (e.source !== window || e.data?.__yah !== "res") return;
     const w = waiting.get(e.data.id);
@@ -17,10 +17,10 @@
   });
   const call = (op, args) =>
     new Promise((resolve, reject) => {
-      const id = `yah-${Date.now()}-${++seq}`;
+      const id = `yah-${crypto.randomUUID()}`;
       waiting.set(id, { resolve, reject });
       window.postMessage({ __yah: "req", id, op, args }, "*");
-      setTimeout(() => waiting.has(id) && (waiting.delete(id), reject(new Error("YNAB did not answer. Reload the page."))), 10000);
+      setTimeout(() => waiting.has(id) && (waiting.delete(id), reject(Object.assign(new Error(`${TIMEOUT} Reload the page.`), { timeout: true }))), 10000);
     });
 
   // ---------- UI ----------
@@ -61,8 +61,8 @@
       .memo-view { display: flex; gap: 6px; align-items: flex-start; }
       .memo-text { flex: 1; }
       button.pencil { border: 1px solid #ccc; background: #fff; border-radius: 6px; cursor: pointer; padding: 1px 8px; font: 600 12px system-ui, -apple-system, sans-serif;
-                      white-space: nowrap; visibility: hidden; }
-      td.memo:hover button.pencil, button.pencil:focus-visible { visibility: visible; }
+                      white-space: nowrap; opacity: 0; }
+      td.memo:hover button.pencil, button.pencil:focus-visible { opacity: 1; }
       button.pencil:hover { background: #f2f4f7; }
       .memo-edit { display: grid; gap: 4px; }
       .memo-edit .acts { display: flex; gap: 6px; }
@@ -94,12 +94,12 @@
     </style>
     <button class="fab" id="fab" hidden>Amazon Helper</button>
     <div class="back" id="back" hidden>
-      <div class="modal" role="dialog" aria-label="Amazon memos">
-        <div class="hd"><h2>YNAB Amazon Helper</h2><a class="hdlink" href="${AMAZON_URL}" target="_blank" rel="noopener">Your Amazon Transactions ↗</a></div>
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="yah-title" tabindex="-1">
+        <div class="hd"><h2 id="yah-title">YNAB Amazon Helper</h2><a class="hdlink" href="${AMAZON_URL}" target="_blank" rel="noopener">Your Amazon Transactions ↗</a></div>
         <div class="st" id="st"></div>
         <div class="bd" id="bd"></div>
         <div class="overlay" id="overlay" hidden><div class="ptext" id="ptext"></div><div class="pbar"><div class="pfill" id="pfill"></div></div></div>
-        <div class="ft"><button class="b" id="close">Close</button><span class="msg" id="msg"></span><button class="b primary" id="apply" disabled>Write memos</button></div>
+        <div class="ft"><button class="b" id="close">Close</button><span class="msg" id="msg" role="status" aria-live="polite"></span><button class="b primary" id="apply" disabled>Write memos</button></div>
       </div>
     </div>`;
   const $ = (id) => ui.getElementById(id);
@@ -107,7 +107,9 @@
   const money = (milli) => (milli < 0 ? "-" : "+") + "$" + (Math.abs(milli) / 1000).toFixed(2);
 
   let rows = [];
-  // Per-transaction choices, kept across automatic updates: { checked, edited, memo }.
+  let settings = { ...YAH.SETTINGS_DEFAULTS };
+  // Per-transaction choices, kept across automatic updates, keyed by YNAB id:
+  // { checked, memo, edited, amazonKey } (amazonKey: the Amazon match an edit belongs to).
   const state = new Map();
   let editing = 0; // number of memo edit boxes open
   let pendingRefresh = false;
@@ -122,10 +124,16 @@
     newRowsChecked = true;
     renderStatus();
     load({ initial: true });
+    ui.querySelector(".modal").focus();
   };
+  const closeDialog = () => ($("back").hidden = true);
   $("fab").onclick = openDialog;
-  $("close").onclick = () => ($("back").hidden = true);
-  $("back").onclick = (e) => e.target === $("back") && ($("back").hidden = true);
+  $("close").onclick = closeDialog;
+  $("back").onclick = (e) => e.target === $("back") && closeDialog();
+  // Escape closes the dialog (an open memo editor handles Escape itself first).
+  $("back").addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !editing) { e.preventDefault(); closeDialog(); }
+  });
 
   // YNAB's page-wide handlers can cancel clicks and steal keys from inputs. Keep
   // events that start in the dialog away from YNAB.
@@ -145,25 +153,27 @@
     if (pencil) editMemo(+pencil.dataset.edit);
   });
 
-  // YNAB also cancels checkbox clicks, which puts the box back. So read the new
-  // state during the click and set it again after the click finishes.
+  // YNAB also cancels checkbox clicks, which puts the box back. So save the new
+  // state during the click (keyed by YNAB id), and show it again after the click.
   $("bd").addEventListener("click", (e) => {
     const box = e.target.closest('input[type="checkbox"]');
     if (!box) return;
     const want = box.checked; // already toggled by the browser at this point
-    setTimeout(() => {
-      box.checked = want;
-      const boxes = [...$("bd").querySelectorAll('input[type="checkbox"][data-i]')];
-      const all = $("bd").querySelector("#all");
-      if (box === all) { boxes.forEach((b) => (b.checked = want)); newRowsChecked = want; }
-      else if (all) all.checked = boxes.every((b) => b.checked);
-      for (const b of boxes) {
-        const r = rows[+b.dataset.i];
-        state.set(r.ynab.id, { ...state.get(r.ynab.id), checked: b.checked });
-      }
-      updateApply();
-    }, 0);
+    if (box.id === "all") {
+      newRowsChecked = want;
+      for (const r of rows) if (r.memo) state.set(r.ynab.id, { ...state.get(r.ynab.id), checked: want });
+    } else if (box.dataset.id) {
+      state.set(box.dataset.id, { ...state.get(box.dataset.id), checked: want });
+    }
+    setTimeout(syncChecks, 0);
   });
+  function syncChecks() {
+    const boxes = [...$("bd").querySelectorAll('input[type="checkbox"][data-id]')];
+    for (const b of boxes) b.checked = !!state.get(b.dataset.id)?.checked;
+    const all = $("bd").querySelector("#all");
+    if (all) all.checked = boxes.length > 0 && boxes.every((b) => b.checked);
+    updateApply();
+  }
 
   // Open and close <details> sections in code, so the dialog does not depend on the default action.
   $("back").addEventListener("click", (e) => {
@@ -224,68 +234,109 @@
   });
   setInterval(() => !$("back").hidden && chrome.runtime?.id && renderStatus(), 15000);
 
+  // One load at a time. A load asked for while one runs sets `again`, and the
+  // running load starts one more pass when it ends. A load never replaces the
+  // table while a memo editor is open; it runs when the editor closes.
+  let loading = false;
+  let again = false;
   async function load({ initial = false } = {}) {
-    // Do not replace the table while a memo is being edited; update when it closes.
     if (editing) { pendingRefresh = true; return; }
+    if (loading) { again = true; return; }
+    loading = true;
+    try {
+      do {
+        again = false;
+        await loadOnce(initial);
+        initial = false;
+      } while (again && !editing);
+      if (again && editing) pendingRefresh = true;
+    } finally {
+      loading = false;
+    }
+  }
+
+  async function loadOnce(initial) {
     if (initial) {
       $("bd").innerHTML = `<p class="muted">Loading…</p>`;
       $("msg").textContent = "";
       $("apply").disabled = true;
     }
     try {
-      const { amazonTxns = {}, orders = {}, settings = {} } = await chrome.storage.local.get(["amazonTxns", "orders", "settings"]);
+      const { amazonTxns = {}, orders = {}, amazonStatus, settings: saved = {} } = await chrome.storage.local.get(["amazonTxns", "orders", "amazonStatus", "settings"]);
       const amazon = Object.values(amazonTxns);
       if (!amazon.length) {
-        $("bd").innerHTML = `<p>No Amazon data yet. Follow the steps above. Memos show here as orders load.</p>`;
+        if (!editing) $("bd").innerHTML = `<p>No Amazon data yet. Follow the steps above. Memos show here as orders load.</p>`;
         return;
       }
-      const s = { ...YAH.SETTINGS_DEFAULTS, ...settings };
-      const since = amazon.map((t) => t.date).sort()[0];
+      settings = { ...YAH.SETTINGS_DEFAULTS, ...saved };
+      const since = amazon.map((t) => t.date).filter(Boolean).sort()[0];
       const sinceMinus = new Date(Date.parse(since + "T00:00:00Z") - 3 * 86400000).toISOString().slice(0, 10);
       const ynabTxns = await call("list", { since: sinceMinus });
+      // An editor may have opened while we waited: do not destroy it.
+      if (editing) { pendingRefresh = true; return; }
 
       // Match against every YNAB Amazon transaction, so ones you already gave a memo
-      // still "use up" their Amazon transaction. Only blank memos are proposed.
-      const matches = YAH.matchTransactions(ynabTxns, amazon, s.dateWindowDays);
+      // still "use up" their Amazon transaction. Only empty memos are proposed.
+      const matches = YAH.matchTransactions(ynabTxns, amazon, settings.dateWindowDays);
       const matchedIds = new Set(matches.map((m) => m.ynab.id));
       rows = matches
-        .filter((m) => !m.ynab.memo)
+        .filter((m) => m.ynab.memoEmpty)
         .map((m) => {
-          const built = YAH.buildMemo(m.amazon, orders, s);
-          const st = state.get(m.ynab.id);
+          const built = YAH.buildMemo(m.amazon, orders, settings);
+          let st = state.get(m.ynab.id);
+          // An edit belongs to one Amazon match. Drop it if the match changed.
+          if (st?.edited && st.amazonKey !== m.amazon.key) st = undefined;
           const memo = st?.edited ? st.memo : built;
           // Flash rows that are new, or whose memo just became available.
           const flash = !initial && memo && (!st || !st.memo);
-          const checked = st && st.memo ? st.checked !== false : newRowsChecked;
-          state.set(m.ynab.id, { ...st, memo, checked });
-          return { ...m, memo, checked, flash, missing: m.amazon.orderIds.filter((id) => !orders[id] || orders[id].error), errors: m.amazon.orderIds.map((id) => orders[id]?.error).filter(Boolean) };
+          // A memo is selected at first, unless the match is ambiguous or the user chose otherwise.
+          const checked = st && st.memo ? st.checked !== false : newRowsChecked && !m.ambiguous;
+          state.set(m.ynab.id, { ...st, memo, checked: !!memo && checked, amazonKey: m.amazon.key });
+          const errors = m.amazon.orderIds.map((id) => orders[id]?.error).filter(Boolean);
+          const missing = m.amazon.orderIds.filter((id) => !orders[id]);
+          return { ...m, memo, checked: !!memo && checked, flash, missing, errors };
         })
         .sort((a, b) => b.ynab.date.localeCompare(a.ynab.date));
-      const unmatched = ynabTxns.filter((t) => !t.memo && !matchedIds.has(t.id) && t.date >= since).sort((a, b) => b.date.localeCompare(a.date));
-      render(rows, unmatched, ynabTxns.length, since);
+      const unmatched = ynabTxns.filter((t) => t.memoEmpty && !matchedIds.has(t.id) && t.date >= since).sort((a, b) => b.date.localeCompare(a.date));
+      const allOrderIds = new Set(amazon.flatMap((t) => t.orderIds));
+      const ordersLoading = [...allOrderIds].filter((id) => !orders[id]).length;
+      const amazonBusy = amazonStatus && Date.now() - amazonStatus.at < 60000 && amazonStatus.kind !== "ok";
+      render(rows, unmatched, { ordersLoading, amazonBusy });
     } catch (e) {
       const msg = /context invalidated/i.test(e.message) ? "The extension was updated. Reload this page." : e.message;
-      $("bd").innerHTML = `<p class="err">${esc(msg)}</p>`;
+      if (!editing) $("bd").innerHTML = `<p class="err">${esc(msg)}</p>`;
     }
   }
 
-  function render(rows, unmatched, total, since) {
+  function emptyMessage(unmatched, { ordersLoading, amazonBusy }) {
+    if (ordersLoading || amazonBusy) return `Waiting for Amazon orders to load${ordersLoading ? ` (${ordersLoading} left)` : ""}. Memos show here as they load.`;
+    if (unmatched.length) return "No memos to write right now. Some YNAB Amazon transactions have no Amazon match (see below).";
+    return "All your Amazon orders have memos. Congrats!";
+  }
+
+  function rowNote(r) {
+    if (r.errors.length) return `<span class="err">Amazon order failed to load: ${esc(r.errors[0])} Click “Retry failed orders” on the Amazon page.</span>`;
+    if (r.missing.length) return `<span class="note">Order details not loaded yet. Open the Amazon page and wait for it to finish.</span>`;
+    return `<span class="note">This Amazon order has no items that could be read, so no memo is proposed.</span>`;
+  }
+
+  function render(rows, unmatched, info) {
     const scroll = $("bd").scrollTop;
     const unmatchedOpen = !!$("bd").querySelector("details#unmatched[open]");
     $("bd").innerHTML = `
       ${rows.length ? `<table>
-        <thead><tr><th class="fit"><input type="checkbox" id="all"${rows.filter((r) => r.memo).every((r) => r.checked) ? " checked" : ""}></th><th class="fit">Date</th><th class="fit">Account</th><th class="fit">Amount</th><th>Memo to write</th><th class="fit">Amazon Order</th></tr></thead>
+        <thead><tr><th class="fit"><input type="checkbox" id="all" aria-label="Select all"${rows.some((r) => r.memo) && rows.filter((r) => r.memo).every((r) => r.checked) ? " checked" : ""}></th><th class="fit">Date</th><th class="fit">Account</th><th class="fit">Amount</th><th>Memo to write</th><th class="fit">Amazon Order</th></tr></thead>
         <tbody>${rows.map((r, i) => `
           <tr${r.flash ? ' class="flash"' : ""}>
-            <td class="fit">${r.memo ? `<input type="checkbox" data-i="${i}"${r.checked ? " checked" : ""}>` : ""}</td>
+            <td class="fit">${r.memo ? `<input type="checkbox" data-i="${i}" data-id="${esc(r.ynab.id)}" aria-label="Write this memo"${r.checked ? " checked" : ""}>` : ""}</td>
             <td class="fit date">${esc(r.ynab.date)}</td>
             <td class="fit">${esc(r.ynab.account)}</td>
             <td class="fit amt">${money(r.ynab.amountMilli)}</td>
-            <td class="memo" data-memo="${i}">${r.memo ? memoView(i) : (r.errors.length ? `<span class="err">Amazon order failed to load: ${esc(r.errors[0])} Click “Retry failed orders” on the Amazon page.</span>` : `<span class="note">Order details not loaded yet. Open the Amazon page and wait for it to finish.</span>`)}
-              ${r.ambiguous ? `<div class="note">Another Amazon charge has the same amount and date. Check this one.</div>` : ""}</td>
+            <td class="memo" data-memo="${i}">${r.memo ? memoView(i) : rowNote(r)}
+              ${r.ambiguous && r.memo ? `<div class="note">Another Amazon charge has the same amount and date, so this row is not selected. Check the order, then select it.</div>` : ""}</td>
             <td class="fit muted">${esc(r.amazon.date)}${r.dayDiff ? ` (${r.dayDiff > 0 ? "+" : ""}${r.dayDiff}d)` : ""}<br>${r.amazon.orderIds.map((id, k) => `<a href="${esc(YAH.orderUrl(id))}" target="_blank" rel="noopener" title="${esc(id)}">View Order on Amazon${r.amazon.orderIds.length > 1 ? ` ${k + 1}` : ""} ↗</a>`).join("<br>")}</td>
           </tr>`).join("")}
-        </tbody></table>` : `<div class="allset">All your Amazon orders have memos. Congrats!</div>`}
+        </tbody></table>` : `<div class="allset">${esc(emptyMessage(unmatched, info))}</div>`}
       ${unmatched.length ? `<details id="unmatched"${unmatchedOpen ? " open" : ""}><summary>${unmatched.length} YNAB Amazon transactions with no Amazon match</summary>
         <table><tbody>${unmatched.map((t) => `<tr><td class="date">${esc(t.date)}</td><td>${esc(t.account)}</td><td class="amt">${money(t.amountMilli)}</td><td class="muted">${esc(t.original || t.payee)}</td></tr>`).join("")}</tbody></table></details>` : ""}`;
     $("bd").scrollTop = scroll;
@@ -302,17 +353,18 @@
     const view = cell.querySelector(".memo-view");
     const box = document.createElement("div");
     box.className = "memo-edit";
-    box.innerHTML = `<textarea maxlength="${YAH.SETTINGS_DEFAULTS.maxMemoLength}">${esc(rows[i].memo)}</textarea>
+    box.innerHTML = `<textarea maxlength="${settings.maxMemoLength}" aria-label="Memo">${esc(rows[i].memo)}</textarea>
       <div class="acts"><button class="b primary" data-save>Save</button><button class="b" data-cancel>Cancel</button></div>`;
     view.replaceWith(box);
     editing++;
+    updateApply();
     const ta = box.querySelector("textarea");
     ta.focus();
     ta.setSelectionRange(ta.value.length, ta.value.length);
     const done = (save) => {
       if (save && ta.value.trim() && ta.value.trim() !== rows[i].memo) {
         rows[i].memo = ta.value.trim();
-        state.set(rows[i].ynab.id, { ...state.get(rows[i].ynab.id), memo: rows[i].memo, edited: true });
+        state.set(rows[i].ynab.id, { ...state.get(rows[i].ynab.id), memo: rows[i].memo, edited: true, amazonKey: rows[i].amazon.key });
       }
       box.outerHTML = memoView(i);
       editing--;
@@ -323,18 +375,24 @@
     box.querySelector("[data-cancel]").onclick = () => done(false);
     ta.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); done(true); }
-      if (e.key === "Escape") { e.preventDefault(); done(false); }
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); }
     });
   }
 
+  // The rows to write come from the saved state, not the screen, so a render in
+  // the middle of a click cannot change them.
   function selected() {
-    return [...$("bd").querySelectorAll('input[type="checkbox"][data-i]:checked')]
-      .map((b) => rows[+b.dataset.i])
-      .filter((r) => r.memo)
-      .map((r) => ({ id: r.ynab.id, memo: r.memo }));
+    return rows
+      .filter((r) => r.memo && state.get(r.ynab.id)?.checked)
+      .map((r) => ({ id: r.ynab.id, memo: r.memo, amountMilli: r.ynab.amountMilli }));
   }
 
   function updateApply() {
+    if (editing) {
+      $("apply").disabled = true;
+      $("apply").textContent = "Save or cancel your edit first";
+      return;
+    }
     const n = selected().length;
     $("apply").disabled = n === 0;
     $("apply").textContent = n ? `Write ${n} memo${n > 1 ? "s" : ""}` : "Write memos";
@@ -351,9 +409,32 @@
   }
   const hideProgress = () => { $("overlay").hidden = true; $("pfill").style.width = "0"; };
 
+  const REASONS = {
+    "already has a memo": "already had a memo",
+    "not found": "not found in YNAB",
+    "amount changed": "amount changed in YNAB",
+    "not an Amazon transaction": "payee is no longer Amazon",
+    "unknown memo shape": "memo could not be read safely",
+    "YNAB cannot set memos here": "YNAB did not allow the change",
+    "bad memo": "memo was empty or too long",
+    "bad request": "request was not valid",
+  };
+
+  function resultText(r) {
+    const n = r.written.length;
+    let text = `Wrote ${n} memo${n === 1 ? "" : "s"}.`;
+    if (r.skipped.length) {
+      const counts = {};
+      for (const sk of r.skipped) counts[sk.reason] = (counts[sk.reason] || 0) + 1;
+      text += ` Skipped ${r.skipped.length}: ` + Object.entries(counts).map(([k, c]) => `${c} ${REASONS[k] || k}`).join(", ") + ".";
+    }
+    if (r.confirmed < n) text += ` Warning: only ${r.confirmed} of ${n} could be confirmed. Check the register.`;
+    return text + " Use YNAB's Undo if needed.";
+  }
+
   async function apply() {
     const updates = selected();
-    if (!updates.length) return;
+    if (!updates.length || editing) return;
     $("apply").disabled = true;
     $("msg").textContent = "";
     const n = updates.length;
@@ -368,10 +449,16 @@
       await load();
       progress("Done", 100);
       await sleepMs(400);
-      $("msg").textContent = `Wrote ${r.confirmed} memo${r.confirmed === 1 ? "" : "s"}.${r.skipped.length ? ` Skipped ${r.skipped.length} (already had a memo).` : ""} Use YNAB's Undo if needed.`;
+      $("msg").textContent = resultText(r);
     } catch (e) {
-      $("msg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
-      $("apply").disabled = false;
+      if (e.timeout) {
+        // The write may still have happened. Reload so the table shows the truth.
+        $("msg").innerHTML = `<span class="err">YNAB did not answer in time. Some memos may have been written. The list was reloaded; check it before you write again.</span>`;
+        await load();
+      } else {
+        $("msg").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+      }
+      updateApply();
     } finally {
       hideProgress();
     }
@@ -381,7 +468,7 @@
   // YNAB shows memos as plain text. For each memo with an Amazon order URL, add a
   // small "Amazon order" link after the memo text. Clicking it opens the order and
   // does not start editing the memo.
-  const ORDER_URL = /https:\/\/www\.amazon\.com\/(?:gp\/css\/summary\/edit\.html|your-orders\/order-details)\?orderID=[A-Z0-9-]+/g;
+  const ORDER_URL = YAH.ORDER_URL_RE;
   const linkStyle = document.createElement("style");
   linkStyle.textContent = `
     .yah-order-link { margin-left: 6px; padding: 0 6px; border-radius: 8px; background: #ff9900; color: #111 !important;

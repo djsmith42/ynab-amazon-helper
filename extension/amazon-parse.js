@@ -10,14 +10,17 @@
     try {
       const nd = JSON.parse(el.textContent);
       const list = nd.props.pageProps.state.transactionResponseState.visibleTransactionResponse.transactionList || [];
-      return list.map((t) => ({
+      return list
+        .map((t) => ({
         date: root.YAH.parseAmazonDate(t.formattedDate),
         amountCents: root.YAH.parseAmountCents(t.formattedAmount),
         status: t.statusInfo?.label || "",
         descriptor: t.statementDescriptor || "",
         card: t.paymentMethodDisplayStringData?.paymentMethodNumber?.lastDigits || "",
         orders: (t.orderData || []).map((o) => ({ id: (o.orderDisplayString || "").replace(/^.*#\s*/, "").trim(), url: o.orderDetailsUrl })),
-      }));
+      }))
+        // Drop rows that cannot be matched safely.
+        .filter((t) => t.date && Number.isFinite(t.amountCents) && t.orders.length && t.orders.every((o) => /^[A-Z0-9]{3}-\d{7}-\d{7}$/.test(o.id)));
     } catch {
       return [];
     }
@@ -32,12 +35,14 @@
       // date, "·", descriptor, "Order #...", amount, status.
       const parts = [...row.querySelectorAll('[data-testid="text"]')].map((e) => e.textContent.trim()).filter(Boolean);
       const date = root.YAH.parseAmazonDate(parts.find((p) => root.YAH.parseAmazonDate(p)));
-      const amountIdx = parts.findIndex((p) => /^[+-−]?\$\d/.test(p));
+      const amountIdx = parts.findIndex((p) => /^[+\-−]?\$\d/.test(p));
       const ids = [...row.textContent.matchAll(/([A-Z0-9]{3}-\d{7}-\d{7})/g)].map((m) => m[1]).filter((v, i, a) => a.indexOf(v) === i);
       if (!date || amountIdx < 0 || !ids.length) continue;
+      const amountCents = root.YAH.parseAmountCents(parts[amountIdx]);
+      if (!Number.isFinite(amountCents)) continue;
       out.push({
         date,
-        amountCents: root.YAH.parseAmountCents(parts[amountIdx]),
+        amountCents,
         status: parts[amountIdx + 1] || "",
         descriptor: parts[parts.indexOf("·") + 1] || "",
         card: (row.querySelector('[data-testid="method-details-number"]')?.textContent || "").trim(),

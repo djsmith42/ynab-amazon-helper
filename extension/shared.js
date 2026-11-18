@@ -21,11 +21,14 @@
 
   /** "-$244.92" -> -24492 (cents). "+$7.57" -> 757. */
   function parseAmountCents(text) {
-    const m = String(text || "").replace(/[\s,]/g, "").match(/([+-−]?)\$(\d+(?:\.\d{1,2})?)/);
+    const m = String(text || "").replace(/[\s,]/g, "").match(/([+\-−]?)\$(\d+(?:\.\d{1,2})?)/);
     if (!m) return null;
     const cents = Math.round(parseFloat(m[2]) * 100);
     return m[1] === "+" ? cents : -cents;
   }
+
+  /** Order-details URLs that orderUrl() makes. Global flag: use with String.match. */
+  const ORDER_URL_RE = /https:\/\/www\.amazon\.com\/(?:gp\/css\/summary\/edit\.html|your-orders\/order-details)\?orderID=[A-Z0-9]{3}-\d{7}-\d{7}/g;
 
   /** Order-details page URL. Digital orders (D01-…) use a different page. */
   function orderUrl(id) {
@@ -58,43 +61,67 @@
   }
 
   /**
-   * Builds the memo for one Amazon transaction.
-   * txn: { amountCents, orderIds, status }
-   * orders: map orderId -> { items: [{title, qty}], shipTo: {name, addressLines}, orderer }
+   * Builds the memo for one Amazon transaction, or returns null when the data is
+   * not complete enough to write. A written memo is never replaced, so a memo is
+   * only made when every order of the transaction loaded and has items.
+   * txn: { amountCents, orderIds }
+   * orders: map orderId -> { items: [{title, qty}], shipTo: {name, addressLines}, orderer } | { error }
+   *
+   * The memo is assembled from whole parts and never cut, so an order link is
+   * always complete. When it is too long, it shortens the item list first, then
+   * drops the second link, the orderer, and the ship-to part, in that order.
    */
   function buildMemo(txn, orders, settings = SETTINGS_DEFAULTS) {
     const s = { ...SETTINGS_DEFAULTS, ...settings };
-    const known = txn.orderIds.map((id) => orders[id]).filter(Boolean);
-    if (!known.length) return null;
+    if (!txn || !Array.isArray(txn.orderIds) || !txn.orderIds.length) return null;
+    const known = txn.orderIds.map((id) => orders[id]);
+    if (known.some((o) => !o || o.error || !Array.isArray(o.items) || !o.items.length)) return null;
 
     const items = [];
-    for (const o of known) for (const it of o.items || []) items.push((it.qty > 1 ? `${it.qty}x ` : "") + shorten(it.title, s.maxTitleLength));
+    for (const o of known) for (const it of o.items) items.push((it.qty > 1 ? `${it.qty}x ` : "") + shorten(it.title, s.maxTitleLength));
     const shipTo = [...new Set(known.map((o) => [o.shipTo?.name, cityFromAddress(o.shipTo?.addressLines)].filter(Boolean).join(", ")).filter(Boolean))];
     const by = [...new Set(known.map((o) => o.orderer).filter(Boolean))];
-
     const prefix = txn.amountCents > 0 ? "Refund: " : "";
-    const tail = [];
-    if (shipTo.length) tail.push(`To: ${shipTo.join("; ")}`);
-    if (by.length) tail.push(`By: ${by.join(", ")}`);
-    // One link per order, at most two, so the memo stays readable.
-    if (s.includeOrderLink) tail.push(...txn.orderIds.slice(0, 2).map(orderUrl));
-    const tailText = tail.length ? " | " + tail.join(" | ") : "";
 
-    // Shrink the item list first so the address and orderer always fit.
-    const room = Math.max(20, s.maxMemoLength - prefix.length - tailText.length);
-    let itemText = items.join("; ") || "(no items)";
-    if (itemText.length > room) {
-      let kept = [];
-      for (const it of items) {
-        const next = [...kept, it].join("; ");
-        const more = items.length - kept.length - 1;
-        if ((next + (more ? ` +${more} more` : "")).length > room) break;
-        kept.push(it);
-      }
-      const more = items.length - kept.length;
-      itemText = kept.length ? kept.join("; ") + (more ? ` +${more} more` : "") : shorten(items[0], room - 8) + (items.length > 1 ? ` +${items.length - 1}` : "");
+    // Tail parts, in the order they show. `drop` is the order they are removed in when space runs out.
+    const links = s.includeOrderLink ? txn.orderIds.slice(0, 2).map(orderUrl) : [];
+    const parts = [
+      shipTo.length && { text: `To: ${shipTo.join("; ")}`, drop: 3 },
+      by.length && { text: `By: ${by.join(", ")}`, drop: 2 },
+      links[0] && { text: links[0], drop: 4 },
+      links[1] && { text: links[1], drop: 1 },
+    ].filter(Boolean);
+
+    const MIN_ITEMS = 20; // keep at least this much room for the products
+    const tailOf = (ps) => (ps.length ? " | " + ps.map((p) => p.text).join(" | ") : "");
+    let kept = parts;
+    while (kept.length && s.maxMemoLength - prefix.length - tailOf(kept).length < MIN_ITEMS) {
+      const worst = kept.reduce((a, b) => (b.drop < a.drop ? b : a));
+      kept = kept.filter((p) => p !== worst);
     }
-    return (prefix + itemText + tailText).slice(0, s.maxMemoLength);
+    const tailText = tailOf(kept);
+    const room = s.maxMemoLength - prefix.length - tailText.length;
+    if (room < 1) return null;
+    return prefix + fitItems(items, room) + tailText;
+  }
+
+  /** Joins item names with "; " in at most `room` characters, ending with "+N more" when some do not fit. */
+  function fitItems(items, room) {
+    const all = items.join("; ");
+    if (all.length <= room) return all;
+    const kept = [];
+    for (let i = 0; i < items.length; i++) {
+      const more = items.length - i - 1;
+      const candidate = [...kept, items[i]].join("; ") + (more ? ` +${more} more` : "");
+      if (candidate.length > room) break;
+      kept.push(items[i]);
+    }
+    if (kept.length) {
+      const more = items.length - kept.length;
+      return kept.join("; ") + (more ? ` +${more} more` : "");
+    }
+    const suffix = items.length > 1 ? ` +${items.length - 1} more` : "";
+    return shorten(items[0], Math.max(1, room - suffix.length)) + suffix;
   }
 
   /**
@@ -105,11 +132,14 @@
    */
   function matchTransactions(ynabTxns, amazonTxns, windowDays = SETTINGS_DEFAULTS.dateWindowDays) {
     const pairs = [];
+    const validDate = (d) => typeof d === "string" && /^\d{4}-\d{2}-\d{2}$/.test(d) && !Number.isNaN(Date.parse(d + "T00:00:00Z"));
     for (const y of ynabTxns) {
+      if (!validDate(y.date) || !Number.isFinite(y.amountMilli)) continue;
       for (const a of amazonTxns) {
+        if (!validDate(a.date) || !Number.isFinite(a.amountCents)) continue;
         if (a.amountCents * 10 !== y.amountMilli) continue;
         const diff = daysBetween(y.date, a.date); // bank usually posts on or after the Amazon date
-        if (diff < -2 || diff > windowDays) continue;
+        if (!(diff >= -2 && diff <= windowDays)) continue;
         pairs.push({ y, a, cost: Math.abs(diff) + (diff < 0 ? 0.5 : 0), diff });
       }
     }
@@ -127,7 +157,7 @@
     return out;
   }
 
-  const api = { SETTINGS_DEFAULTS, orderUrl, parseAmazonDate, parseAmountCents, daysBetween, shorten, cityFromAddress, buildMemo, matchTransactions };
+  const api = { SETTINGS_DEFAULTS, ORDER_URL_RE, fitItems, orderUrl, parseAmazonDate, parseAmountCents, daysBetween, shorten, cityFromAddress, buildMemo, matchTransactions };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   else root.YAH = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);

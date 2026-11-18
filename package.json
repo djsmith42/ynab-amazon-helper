@@ -1,0 +1,11 @@
+{
+  "name": "ynab-amazon-helper",
+  "private": true,
+  "description": "Chrome extension that fills YNAB memos for Amazon transactions.",
+  "scripts": {
+    "test": "node --test --test-force-exit test/*.test.js"
+  },
+  "devDependencies": {
+    "jsdom": "24.1.3"
+  }
+}

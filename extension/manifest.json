@@ -2,24 +2,44 @@
   "manifest_version": 3,
   "name": "YNAB Amazon Helper",
   "version": "0.1.0",
-  "description": "Fills YNAB memos for Amazon transactions with product names, shipping address, and orderer, using your own logged-in sessions.",
-  "permissions": ["storage"],
-  "icons": { "128": "icon128.png" },
+  "description": "Fills empty YNAB memos for Amazon transactions with items, ship-to, orderer, and order link, using your own sessions.",
+  "permissions": [
+    "storage"
+  ],
+  "icons": {
+    "128": "icon128.png"
+  },
   "content_scripts": [
     {
-      "matches": ["https://www.amazon.com/cpe/yourpayments/transactions*"],
-      "js": ["shared.js", "amazon-parse.js", "amazon.js"],
+      "matches": [
+        "https://www.amazon.com/cpe/yourpayments/transactions*"
+      ],
+      "js": [
+        "shared.js",
+        "amazon-parse.js",
+        "amazon.js"
+      ],
       "run_at": "document_idle"
     },
     {
-      "matches": ["https://app.ynab.com/*"],
-      "js": ["ynab-main.js"],
+      "matches": [
+        "https://app.ynab.com/*"
+      ],
+      "js": [
+        "guard.js",
+        "ynab-main.js"
+      ],
       "run_at": "document_idle",
       "world": "MAIN"
     },
     {
-      "matches": ["https://app.ynab.com/*"],
-      "js": ["shared.js", "ynab.js"],
+      "matches": [
+        "https://app.ynab.com/*"
+      ],
+      "js": [
+        "shared.js",
+        "ynab.js"
+      ],
       "run_at": "document_idle"
     }
   ]

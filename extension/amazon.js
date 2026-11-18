@@ -27,6 +27,7 @@
     const seenSig = {};
     let added = 0;
     for (const t of found) {
+      if (!t.date || !Number.isFinite(t.amountCents)) continue; // never save rows that cannot be matched safely
       const orderIds = t.orders.map((o) => o.id);
       const sig = `${t.date}|${t.amountCents}|${orderIds.join(",")}`;
       seenSig[sig] = (seenSig[sig] || 0) + 1;
@@ -59,10 +60,10 @@
       // If the error stays for 90 s, stop waiting for it so order details still load.
       const errorBlocks = errorShown && Date.now() - errorSince < 90000;
       if (!paging && !errorBlocks && Date.now() - lastListActivity >= 4000) break;
-      waitingForList = true;
+      if (!waitingForList) { waitingForList = true; render(); } // show "Paused" in the panel
       await sleep(500);
     }
-    waitingForList = false;
+    if (waitingForList) { waitingForList = false; render(); }
   }
   let waitingForList = false;
 
@@ -284,7 +285,7 @@
     const ok = [...ids].filter((id) => orders[id] && !orders[id].error).length;
     const failed = [...ids].filter((id) => orders[id]?.error).length;
     const dates = txns.map((t) => t.date).sort();
-    const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]);
+    const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
     const pct = (n) => (ids.size ? (100 * n) / ids.size : 0).toFixed(1);
     const remaining = ids.size - ok - failed;
     ui.getElementById("body").innerHTML = `
@@ -315,7 +316,7 @@
     else if (!txns.length) pill = ["idle", "🔍", "No orders found yet"];
     else if (failed) pill = ["warn", "⚠️", `Ready, ${failed} order${failed > 1 ? "s" : ""} failed`];
     else if (remaining) pill = ["warn", "⏸️", `${remaining} order${remaining > 1 ? "s" : ""} not read yet`];
-    else pill = ["ok", "✅", "Ready: Open YNAB and click Amazon memos"];
+    else pill = ["ok", "✅", "Ready: Open YNAB and click Amazon Helper"];
     const el = ui.getElementById("pill");
     el.className = `pill ${pill[0]}`;
     el.innerHTML = `<span class="dot">${pill[1]}</span><span>${esc(pill[2])}</span>`;
