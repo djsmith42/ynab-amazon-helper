@@ -287,7 +287,6 @@
           </tr>`).join("")}
         </tbody></table>` : `<div class="allset">All your Amazon orders have memos. Congrats!</div>`}
       ${unmatched.length ? `<details id="unmatched"${unmatchedOpen ? " open" : ""}><summary>${unmatched.length} YNAB Amazon transactions with no Amazon match</summary>
-        <p class="muted">These may be older than the Amazon data, or not on the Amazon page yet. Scroll further back on the Amazon page to find them.</p>
         <table><tbody>${unmatched.map((t) => `<tr><td class="date">${esc(t.date)}</td><td>${esc(t.account)}</td><td class="amt">${money(t.amountMilli)}</td><td class="muted">${esc(t.original || t.payee)}</td></tr>`).join("")}</tbody></table></details>` : ""}`;
     $("bd").scrollTop = scroll;
     updateApply();
