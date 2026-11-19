@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "YNAB Amazon Helper",
-  "version": "0.1.0",
-  "description": "Fills empty YNAB memos for Amazon transactions with items, ship-to, orderer, and order link, using your own sessions.",
+  "name": "YNAB Helpers",
+  "version": "0.2.0",
+  "description": "Fills empty YNAB memos for Amazon and Venmo transactions (items, people, notes, links), using your own sessions.",
   "permissions": [
     "storage"
   ],
@@ -23,11 +23,23 @@
     },
     {
       "matches": [
+        "https://account.venmo.com/*"
+      ],
+      "js": [
+        "venmo-shared.js",
+        "venmo.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
         "https://app.ynab.com/*"
       ],
       "js": [
         "guard.js",
-        "ynab-main.js"
+        "ynab-bridge.js",
+        "amazon-ynab-main.js",
+        "venmo-ynab-main.js"
       ],
       "run_at": "document_idle",
       "world": "MAIN"
@@ -38,7 +50,10 @@
       ],
       "js": [
         "shared.js",
-        "ynab.js"
+        "venmo-shared.js",
+        "ynab-helper.js",
+        "amazon-ynab.js",
+        "venmo-ynab.js"
       ],
       "run_at": "document_idle"
     }

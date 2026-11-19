@@ -72,3 +72,19 @@ test("refuses very large batches", () => {
   const m = fakeYnab([]);
   assert.throws(() => Y.applyMemoUpdates(m, new Array(Y.MAX_BATCH + 1).fill({ id: "a", memo: "x", amountMilli: 1 }), payee), /Too many/);
 });
+
+test("never writes YNAB's hidden copy of a matched import", () => {
+  const m = fakeYnab([amz("hidden", { source: "matched_import", matchedTransactionId: "shown" }), amz("shown", { source: "Imported", matchedTransactionId: "hidden" })]);
+  const r = Y.applyMemoUpdates(m, ["hidden", "shown"].map((id) => ({ id, memo: "x", amountMilli: -10000 })), payee);
+  assert.deepEqual(r.written, ["shown"]);
+  assert.equal(m.byId.get("hidden").memo, null);
+  assert.deepEqual(r.skipped.map((s) => [s.id, s.reason]), [["hidden", "hidden matched import"]]);
+});
+
+test("the Venmo helper writes only Venmo payees", () => {
+  const m = fakeYnab([amz("amazon"), amz("venmo", { payeeName: "Venmo" })]);
+  const r = Y.applyMemoUpdates(m, ["amazon", "venmo"].map((id) => ({ id, memo: "x", amountMilli: -10000 })), payee, Y.MAX_MEMO_LENGTH, "venmo");
+  assert.deepEqual(r.written, ["venmo"]);
+  assert.deepEqual(r.skipped.map((s) => [s.id, s.reason]), [["amazon", "not a Venmo transaction"]]);
+  assert.throws(() => Y.applyMemoUpdates(m, [], payee, Y.MAX_MEMO_LENGTH, "nope"), /unknown payee check/);
+});

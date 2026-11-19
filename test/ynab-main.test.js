@@ -1,6 +1,6 @@
-// ynab-main.js runs in YNAB's page. These tests load the real guard.js and
-// ynab-main.js into a sandbox with a fake YNAB entity manager, and talk to it
-// through the same postMessage bridge the extension uses.
+// ynab-bridge.js + amazon-ynab-main.js run in YNAB's page. These tests load them
+// with the real guard.js into a sandbox with a fake YNAB entity manager, and talk
+// to them through the same postMessage bridge the extension uses.
 const test = require("node:test");
 const assert = require("node:assert");
 const fs = require("node:fs");
@@ -34,7 +34,8 @@ function makePage(transactions, { withYnab = true } = {}) {
   const ctx = vm.createContext(window);
   inner = vm.runInContext("globalThis.window = globalThis", ctx); // like a browser: window is the global
   vm.runInContext(src("guard.js"), ctx);
-  vm.runInContext(src("ynab-main.js"), ctx);
+  vm.runInContext(src("ynab-bridge.js"), ctx);
+  vm.runInContext(src("amazon-ynab-main.js"), ctx);
   const send = (op, args, id = `t${replies.length}`) => {
     window.postMessage({ __yah: "req", id, op, args });
     return replies.find((r) => r.id === id);
@@ -101,4 +102,11 @@ test("a clear error while YNAB is still loading", () => {
   const p = makePage([], { withYnab: false });
   assert.match(p.send("list", {}).error, /not ready/);
   assert.match(p.send("apply", { updates: [] }).error, /not ready/);
+});
+
+test("list skips YNAB's hidden copy of a matched import", () => {
+  const p = makePage([amz("hidden", { source: "matched_import", matchedTransactionId: "shown" }), amz("shown", { source: "Imported", memo: "typed by hand", matchedTransactionId: "hidden" })]);
+  const r = p.send("list", {});
+  assert.ok(r.ok, r.error);
+  assert.deepEqual(r.result.map((t) => t.id), ["shown"]);
 });

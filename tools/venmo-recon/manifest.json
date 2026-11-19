@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Venmo RECON (dev only)",
+  "version": "0.0.1",
+  "description": "Dev-only: dumps Venmo page data and API calls to a local server on 127.0.0.1:8765.",
+  "host_permissions": [
+    "https://*.venmo.com/*",
+    "http://127.0.0.1:8765/*"
+  ],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://*.venmo.com/*"],
+      "js": ["main.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://*.venmo.com/*"],
+      "js": ["bridge.js"],
+      "run_at": "document_start"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
-// The YNAB dialog (ynab.js) in a simulated browser (jsdom). It loads the real
-// shared.js and ynab.js, with a fake chrome.storage and a fake YNAB bridge that
+// The Amazon YNAB dialog (ynab-helper.js + amazon-ynab.js) in a simulated browser (jsdom). It loads the real
+// shared.js, ynab-helper.js, and amazon-ynab.js, with a fake chrome.storage and a fake YNAB bridge that
 // uses the real write guard (guard.js).
 const test = require("node:test");
 const assert = require("node:assert");
@@ -87,7 +87,8 @@ function setup({ storage, ynab } = defaultData(), html = "") {
   });
 
   w.eval(src("shared.js"));
-  w.eval(src("ynab.js"));
+  w.eval(src("ynab-helper.js"));
+  w.eval(src("amazon-ynab.js"));
   const root = () => w.document.getElementById("yah-host").shadowRoot;
   const $ = (id) => root().getElementById(id);
   const rows = () => [...$("bd").querySelectorAll("table:first-of-type tbody tr")].map((tr) => ({
@@ -229,7 +230,7 @@ test("links open in a new tab; instructions collapse is remembered", async () =>
   assert.match(t.opened[0], /orderID=/);
   const summary = await waitFor(() => t.$("st").querySelector("#instr summary"), "instructions");
   summary.click();
-  await waitFor(() => t.data.uiPrefs?.instructionsCollapsed === true, "pref saved");
+  await waitFor(() => t.data.uiPrefs?.amazon?.instructionsCollapsed === true, "pref saved");
 });
 
 test("register memos with an order link get an Amazon order button", async () => {

@@ -1,7 +1,7 @@
 {
-  "name": "ynab-amazon-helper",
+  "name": "ynab-helpers",
   "private": true,
-  "description": "Chrome extension that fills YNAB memos for Amazon transactions.",
+  "description": "Chrome extension that fills YNAB memos for Amazon and Venmo transactions.",
   "scripts": {
     "test": "node --test --test-force-exit test/*.test.js"
   },
