@@ -55,7 +55,8 @@ YNAB register, each memo with an order link gets an **Amazon order ↗** button.
 
 1. Open https://account.venmo.com/?feed=mine. A panel in the lower right reads
    your Venmo feed (the page's own `/api/stories` API, last 120 days) and saves
-   it. Click **Load older transactions** to go 120 days further back. Wait
+   it. Later visits read only the new transactions. Click **Load older
+   transactions** to go 120 days further back than the oldest saved one. Wait
    until the panel says **Ready**.
 2. Open YNAB and click **Venmo Helper** (in the sidebar, under **Amazon
    Helper**). Review the proposed memos, select the rows you want, and click

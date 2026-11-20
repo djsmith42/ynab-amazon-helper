@@ -22,6 +22,7 @@
   let loads = 0; // loads started in this tab; the first reads the newest transactions
   let atEnd = false; // the whole Venmo history is read
   let cleared = false; // saved data was just cleared; the next step is "Reload Venmo transactions"
+  let lastResult = ""; // what the last load added, for the panel
   let progress = null; // { from, to, oldest } while a load runs (ISO dates)
   let lastError = "";
   let signInNeeded = false;
@@ -72,7 +73,14 @@
   const isoDaysBefore = (iso, days) => new Date(Date.parse(iso + "T00:00:00Z") - days * 86400000).toISOString().slice(0, 10);
   const today = () => new Date().toISOString().slice(0, 10);
 
-  // Reads feed pages until it is DAYS_PER_LOAD days older than where it started.
+  // Reads feed pages, newest first. There are two kinds of load:
+  // - Catch-up: the first load in this tab when transactions are already saved.
+  //   It reads only what is new: it stops at the first page whose transactions
+  //   are all saved already. A visit with nothing new costs one or two requests.
+  // - Full: with no saved data, or for "Load older transactions". It reads until
+  //   it is DAYS_PER_LOAD days older than the oldest saved transaction.
+  // A transaction saved by an older version (no raw story) counts as not saved,
+  // so it is read again.
   async function load() {
     if (busy || atEnd) return;
     busy = true;
@@ -80,8 +88,15 @@
     loads++;
     lastError = "";
     signInNeeded = false;
+    lastResult = "";
+    const { venmoTxns: saved = {} } = await store.get("venmoTxns");
+    const isSaved = (t) => !!saved[t.key]?.story;
+    const savedDates = Object.values(saved).filter((t) => t.story).map((t) => t.date).filter(Boolean).sort();
+    const catchUp = !cursor && savedDates.length > 0;
     const from = oldest || today();
-    progress = { from, to: isoDaysBefore(from, DAYS_PER_LOAD), oldest: from };
+    const to = catchUp ? savedDates[savedDates.length - 1] : isoDaysBefore([from, ...savedDates.slice(0, 1)].sort()[0], DAYS_PER_LOAD);
+    progress = { from: today(), to, oldest: from, catchUp };
+    let added = 0;
     render();
     try {
       me ||= await getWithRetry("/api/user/profile");
@@ -91,14 +106,18 @@
         // The raw story is saved too, so the YNAB side can rebuild memos with the current parser.
         const txns = (res.stories || []).map((s) => YVH.parseStory(s, me.id)).filter(Boolean);
         for (const t of txns) if (!oldest || t.date < oldest) oldest = t.date;
+        const fresh = txns.filter((t) => !isSaved(t));
+        added += fresh.length;
         await save(txns);
+        for (const t of txns) saved[t.key] = t;
         progress.oldest = oldest || from;
         render();
         if (!res.nextId || res.nextId === cursor || !res.stories?.length) { atEnd = true; break; }
-        cursor = res.nextId;
-        if (oldest && oldest < progress.to) break;
+        cursor = res.nextId; // "Load older transactions" continues from here
+        if (catchUp ? txns.length && !fresh.length : oldest && oldest < progress.to) break;
         await sleep(PAGE_DELAY_MS);
       }
+      lastResult = added ? `Added ${added} new transaction${added === 1 ? "" : "s"}.` : catchUp ? "No new transactions since your last visit." : "No new transactions found.";
     } catch (e) {
       if (e.status === 401 || e.status === 403) { signInNeeded = true; lastError = "Venmo asked you to sign in again. Reload this page after you sign in."; }
       else lastError = String(e.message || e);
@@ -234,12 +253,13 @@
     if (progress) {
       const span = Date.parse(progress.from) - Date.parse(progress.to);
       const done = Math.min(1, Math.max(0, (Date.parse(progress.from) - Date.parse(progress.oldest)) / span));
-      bar = `<div class="lbl"><span>Reading back to ${esc(shortDate(progress.to))}</span></div>
+      bar = `<div class="lbl"><span>${progress.catchUp ? "Checking for new transactions" : `Reading back to ${esc(shortDate(progress.to))}`}</span></div>
         <div class="bar"><div class="run" style="width:${(100 * done).toFixed(1)}%"></div><span class="txt">back to ${esc(shortDate(progress.oldest))}</span></div>`;
     }
     ui.getElementById("body").innerHTML = `
       ${dates.length ? `<div class="row muted" style="margin-bottom:6px">Imported ${txns.length} transaction${txns.length === 1 ? "" : "s"} ${esc(dateRange(dates[0], dates[dates.length - 1]))}</div>` : ""}
       ${bar}
+      ${lastResult && !busy ? `<div class="row">${esc(lastResult)}</div>` : ""}
       ${atEnd && !busy ? `<div class="row">Reached the start of your Venmo history.</div>` : ""}
       ${lastError ? `<div class="err">${esc(lastError)}</div>` : ""}
       ${busy ? `<div class="row muted" style="margin-top:6px">Keep this tab open until it is done.</div>` : ""}
